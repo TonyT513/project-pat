@@ -1,0 +1,1374 @@
+//@version=6
+indicator("Gods plan X1", shorttitle = " Gods Plan", overlay = true,
+ max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ═══════════════════════════════════════════════════════════════
+// TOOLTIPS
+// ═══════════════════════════════════════════════════════════════
+string TT_AT = "If selected, the indicator automatically picks the HTF for TF1:\n\n"
+ + " • 2h  — chart is seconds-based\n"
+ + " • 1D  — chart is intraday\n"
+ + " • 1W  — chart < 1 week\n"
+ + " • 1M  — chart < 1 month\n"
+ + " • 3M  — chart < 3 months\n"
+ + " • 12M — otherwise\n\n"
+ + "Uncheck to set Timeframe 1 manually."
+string TT_UC  = "When unchecked, intraday data is used during calculation on intraday charts. "
+ + "Extended hours (if shown) are included. Note: intraday OHLC may differ from daily-based values for stocks."
+string TT_FIB = "Fibonacci levels are drawn on the NEXT trading session (6 PM → 4 PM next day) after each closed HTF box.\n"
+ + "Range = top to bottom of the closed box."
+string TT_EXT = "When enabled, Fibonacci lines extend beyond the 4 PM session boundary to the right edge of the chart."
+
+// ═══════════════════════════════════════════════════════════════
+// COLOR CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+color UP_COLOR   = #009688
+color DN_COLOR   = #F44336
+color UPBD_COLOR = color.new(UP_COLOR, 70)
+color DNBD_COLOR = color.new(DN_COLOR, 70)
+
+// ═══════════════════════════════════════════════════════════════
+// ENUM
+// ═══════════════════════════════════════════════════════════════
+//@enum An enumeration of named values representing display modes.
+enum CalcType
+    hl   = "High/Low Range"
+    oc   = "Open/Close Range"
+    ohlc = "OHLC"
+    tr   = "True Range"
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — GENERAL
+// ═══════════════════════════════════════════════════════════════
+string   GRP_GEN       = "── General ──"
+bool     autoTFInput   = input(false,            "Auto-timeframe (TF1)",   tooltip = TT_AT, group = GRP_GEN)   // default OFF
+string   tfInput       = input.timeframe("1D",   "Timeframe 1",            active  = not autoTFInput, group = GRP_GEN)  // default 1D
+CalcType calcTypeInput = input.enum(CalcType.hl, "Calculation",            group = GRP_GEN)
+bool     useHaInput    = input.bool(false,       "Heikin Ashi values",     group = GRP_GEN)
+bool     useDailyInput = input.bool(false,       "Use daily-based values", tooltip = TT_UC, group = GRP_GEN)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — TIMEFRAME 1 BOX COLORS
+// ═══════════════════════════════════════════════════════════════
+string GRP_TF1           = "── Timeframe 1 — Box Colors ──"
+color upBorderColorInput = input(UP_COLOR,   "Up   ", inline = "tf1a", group = GRP_TF1)
+color upBodyColorInput   = input(UPBD_COLOR, "fill",  inline = "tf1a", group = GRP_TF1)
+color dnBorderColorInput = input(DN_COLOR,   "Down ", inline = "tf1b", group = GRP_TF1)
+color dnBodyColorInput   = input(DNBD_COLOR, "fill",  inline = "tf1b", group = GRP_TF1)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — TIMEFRAME 2
+// ═══════════════════════════════════════════════════════════════
+string GRP_TF2          = "── Timeframe 2 ──"
+bool   showTF2Input     = input.bool(true,     "Enable Timeframe 2",                        group = GRP_TF2)
+string tf2Input         = input.timeframe("60","Timeframe 2",   active = showTF2Input,      group = GRP_TF2)
+color  tf2UpBorderColor = input.color(#00BCD4, "Up   ",         inline = "tf2a",            group = GRP_TF2)
+color  tf2UpBodyColor   = input.color(color.new(#00BCD4, 70),  "fill", inline = "tf2a",    group = GRP_TF2)
+color  tf2DnBorderColor = input.color(#9C27B0, "Down ",         inline = "tf2b",            group = GRP_TF2)
+color  tf2DnBodyColor   = input.color(color.new(#9C27B0, 70),  "fill", inline = "tf2b",    group = GRP_TF2)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — TIMEFRAME 3
+// ═══════════════════════════════════════════════════════════════
+string GRP_TF3          = "── Timeframe 3 ──"
+bool   showTF3Input     = input.bool(false,    "Enable Timeframe 3",                        group = GRP_TF3)
+string tf3Input         = input.timeframe("3M","Timeframe 3",   active = showTF3Input,      group = GRP_TF3)
+color  tf3UpBorderColor = input.color(#FF9800, "Up   ",         inline = "tf3a",            group = GRP_TF3)
+color  tf3UpBodyColor   = input.color(color.new(#FF9800, 70),  "fill", inline = "tf3a",    group = GRP_TF3)
+color  tf3DnBorderColor = input.color(#E91E63, "Down ",         inline = "tf3b",            group = GRP_TF3)
+color  tf3DnBodyColor   = input.color(color.new(#E91E63, 70),  "fill", inline = "tf3b",    group = GRP_TF3)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — LEVEL LINES  (TF1 only — always independent of Fib)
+// ═══════════════════════════════════════════════════════════════
+string GRP_LVL           = "── Level Lines — Top / Bottom ──"
+bool   showTopLineInput  = input.bool(true,     "Show top line",                             group = GRP_LVL)
+bool   showBotLineInput  = input.bool(true,     "Show bottom line",                          group = GRP_LVL)
+color  topLineColorInput = input.color(#F44336, "Top  ", inline = "lc",                      group = GRP_LVL)
+color  botLineColorInput = input.color(#F44336, "Bot  ", inline = "lc",                      group = GRP_LVL)
+int    lineWidthInput    = input.int(1,         "Width ", minval = 1, maxval = 5, inline = "lw", group = GRP_LVL)
+string lineStyleInput    = input.string("Solid","Style",  options = ["Solid","Dashed","Dotted"], inline = "lw", group = GRP_LVL)
+int    lookbackInput     = input.int(2,         "Lookback (boxes)", minval = 1, maxval = 100, group = GRP_LVL)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — DAY-OF-WEEK LABELS
+// ═══════════════════════════════════════════════════════════════
+string GRP_DOW              = "── Day Labels ──"
+bool   showDowLabelsInput   = input.bool(true,          "Show day-of-week labels",     group = GRP_DOW)
+string dowHPosInput         = input.string("Middle",      "Horizontal position", options = ["Left","Middle","Right"], group = GRP_DOW)
+string dowVPosInput         = input.string("Above",     "Vertical position",   options = ["Above","Below"],         group = GRP_DOW)
+color  dowLabelColorInput   = input.color(color.white,  "Label text color",            group = GRP_DOW)
+color  dowLabelBgInput      = input.color(color.new(color.white, 85), "Label background", group = GRP_DOW)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — FIBONACCI HISTORICAL
+// ═══════════════════════════════════════════════════════════════
+string GRP_FIB            = "── Fibonacci — Historical ──"
+bool   showFibInput       = input.bool(false,   "Show Fibonacci",            tooltip = TT_FIB, group = GRP_FIB)
+bool   showFibLinesInput  = input.bool(true,    "Show fib lines",            group = GRP_FIB)
+int    fibLookbackInput   = input.int(2,        "Lookback (boxes)", minval = 1, maxval = 20,  group = GRP_FIB)
+bool   fibExtendInput     = input.bool(false,   "Extend beyond session",     tooltip = TT_EXT, group = GRP_FIB)
+bool   showFibLabelsInput = input.bool(true,    "Show labels",               group = GRP_FIB)
+int    fibLineWidthInput  = input.int(1,        "Width ", minval = 1, maxval = 5, inline = "flw", group = GRP_FIB)
+string fibLineStyleInput  = input.string("Dashed","Style", options = ["Solid","Dashed","Dotted"], inline = "flw", group = GRP_FIB)
+
+// Fib colors — paired inline (mirrored levels side-by-side)
+color fib000ColorInput = input.color(color.new(#B0BEC5, 0), "0.000 ", inline = "fc0", group = GRP_FIB)
+color fib100ColorInput = input.color(color.new(#B0BEC5, 0), "1.000",  inline = "fc0", group = GRP_FIB)
+color fib020ColorInput = input.color(color.new(#29B6F6, 0), "0.200 ", inline = "fc1", group = GRP_FIB)
+color fib080ColorInput = input.color(color.new(#29B6F6, 0), "0.800",  inline = "fc1", group = GRP_FIB)
+color fib025ColorInput = input.color(color.new(#29B6F6, 0), "0.250 ", inline = "fc2", group = GRP_FIB)
+color fib075ColorInput = input.color(color.new(#29B6F6, 0), "0.750",  inline = "fc2", group = GRP_FIB)
+color fib345ColorInput = input.color(color.new(#FFEB3B, 0), "0.345 ", inline = "fc3", group = GRP_FIB)
+color fib655ColorInput = input.color(color.new(#FFEB3B, 0), "0.655",  inline = "fc3", group = GRP_FIB)
+color fib050ColorInput = input.color(color.new(#FF9800, 0), "0.500",               group = GRP_FIB)
+color fib100aColorInput = input.color(color.new(#9E9E9E, 0), "0.100 ", inline = "fc4", group = GRP_FIB)
+color fib125ColorInput  = input.color(color.new(#9E9E9E, 0), "0.125",  inline = "fc4", group = GRP_FIB)
+color fib875ColorInput  = input.color(color.new(#9E9E9E, 0), "0.875 ", inline = "fc5", group = GRP_FIB)
+color fib900ColorInput  = input.color(color.new(#9E9E9E, 0), "0.900",  inline = "fc5", group = GRP_FIB)
+
+// Fib zone shading
+bool  showZoneLowInput   = input.bool(true,                    "Shade 0.20–0.25 ", inline = "fz1", group = GRP_FIB)
+color zoneLowColorInput  = input.color(color.new(#2196F3, 80),"",                  inline = "fz1", group = GRP_FIB)
+bool  showZoneHighInput  = input.bool(true,                    "Shade 0.75–0.80 ", inline = "fz2", group = GRP_FIB)
+color zoneHighColorInput = input.color(color.new(#2196F3, 80),"",                  inline = "fz2", group = GRP_FIB)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — FIBONACCI REAL-TIME
+// ═══════════════════════════════════════════════════════════════
+string GRP_RT              = "── Fibonacci — Real-time ──"
+bool   showRtFibInput      = input.bool(false,   "Show real-time fib",                      group = GRP_RT)   // default OFF
+bool   showRtLinesInput    = input.bool(true,    "Show RT fib lines",                        group = GRP_RT)
+bool   showRtLabelsInput   = input.bool(true,    "Show labels",                              group = GRP_RT)
+int    rtLineWidthInput    = input.int(1,        "Width ", minval = 1, maxval = 5, inline = "rlw", group = GRP_RT)
+string rtLineStyleInput    = input.string("Solid","Style", options = ["Solid","Dashed","Dotted"], inline = "rlw", group = GRP_RT)
+
+// RT colors — paired inline
+color rtFib000Color = input.color(color.new(#B0BEC5, 0), "0.000 ", inline = "rc0", group = GRP_RT)
+color rtFib100Color = input.color(color.new(#B0BEC5, 0), "1.000",  inline = "rc0", group = GRP_RT)
+color rtFib020Color = input.color(color.new(#29B6F6, 0), "0.200 ", inline = "rc1", group = GRP_RT)
+color rtFib080Color = input.color(color.new(#29B6F6, 0), "0.800",  inline = "rc1", group = GRP_RT)
+color rtFib025Color = input.color(color.new(#29B6F6, 0), "0.250 ", inline = "rc2", group = GRP_RT)
+color rtFib075Color = input.color(color.new(#29B6F6, 0), "0.750",  inline = "rc2", group = GRP_RT)
+color rtFib345Color = input.color(color.new(#FFEB3B, 0), "0.345 ", inline = "rc3", group = GRP_RT)
+color rtFib655Color = input.color(color.new(#FFEB3B, 0), "0.655",  inline = "rc3", group = GRP_RT)
+color rtFib050Color = input.color(color.new(#FF9800, 0), "0.500",               group = GRP_RT)
+color rtFib100aColor = input.color(color.new(#9E9E9E, 0), "0.100 ", inline = "rc4", group = GRP_RT)
+color rtFib125Color  = input.color(color.new(#9E9E9E, 0), "0.125",  inline = "rc4", group = GRP_RT)
+color rtFib875Color  = input.color(color.new(#9E9E9E, 0), "0.875 ", inline = "rc5", group = GRP_RT)
+color rtFib900Color  = input.color(color.new(#9E9E9E, 0), "0.900",  inline = "rc5", group = GRP_RT)
+
+// RT zone shading
+bool  showRtZoneLowInput   = input.bool(true,                    "Shade RT 0.20–0.25 ", inline = "rz1", group = GRP_RT)
+color rtZoneLowColorInput  = input.color(color.new(#2196F3, 80),"",                     inline = "rz1", group = GRP_RT)
+bool  showRtZoneHighInput  = input.bool(true,                    "Shade RT 0.75–0.80 ", inline = "rz2", group = GRP_RT)
+color rtZoneHighColorInput = input.color(color.new(#2196F3, 80),"",                     inline = "rz2", group = GRP_RT)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — ORDER BLOCKS (TF2)
+// ═══════════════════════════════════════════════════════════════
+string GRP_OB            = "── Order Blocks (TF2) ──"
+bool   showOBInput       = input.bool(true,    "Show Order Blocks",                                    group = GRP_OB)
+int    obLookbackInput   = input.int(5,        "Lookback (boxes)",    minval = 1, maxval = 50,         group = GRP_OB)
+int    obBorderWidth     = input.int(1,        "Border width",        minval = 0, maxval = 5,          group = GRP_OB)
+color  bullOBColor       = input.color(color.new(#FFFFFF, 70), "Bull fill ", inline = "obc1",         group = GRP_OB)
+color  bullOBBorder      = input.color(color.new(#FFFFFF,  0), "border",     inline = "obc1",         group = GRP_OB)
+color  bearOBColor       = input.color(color.new(#FFFFFF, 70), "Bear fill ", inline = "obc2",         group = GRP_OB)
+color  bearOBBorder      = input.color(color.new(#FFFFFF,  0), "border",     inline = "obc2",         group = GRP_OB)
+
+// ═══════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════
+//@type Stores HTF bar OHLC info.
+type OHLC
+    float o
+    float h
+    float l
+    float c
+    float prevC
+
+//@type Stores top/bottom level lines for one HTF box.
+type LevelLines
+    line topLine
+    line botLine
+
+//@type Stores all drawing objects for one Fibonacci set (9 levels + 2 zone boxes).
+type FibSet
+    line l000
+    line l020
+    line l025
+    line l100a
+    line l125
+    line l345
+    line l050
+    line l655
+    line l875
+    line l900
+    line l075
+    line l080
+    line l100
+    box  zoneLow
+    box  zoneHigh
+    label lb000
+    label lb020
+    label lb025
+    label lb100a
+    label lb125
+    label lb345
+    label lb050
+    label lb655
+    label lb875
+    label lb900
+    label lb075
+    label lb080
+    label lb100
+
+//@type Stores info about a closed TF2 box for order block detection.
+type TF2BoxInfo
+    bool  isUp       // true = bullish (close >= open)
+    float hi
+    float lo
+    int   leftBar
+    int   rightBar
+
+//@type Tracks a live order block box that extends rightward until 4 PM.
+type OBEntry
+    box  bx
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+//@function Resolves Pine line style from user string input.
+lineStyleResolved(styleStr) =>
+    switch styleStr
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        =>          line.style_solid
+
+//@function Sets the position and colors of a box, or hides it if cond is true.
+method setBox(box bx, cond, left, right, top, bottom, diff, upBodyColor, dnBodyColor, upBorderColor, dnBorderColor) =>
+    color bodyColor   = diff < 0 ? dnBodyColor   : upBodyColor
+    color borderColor = diff < 0 ? dnBorderColor : upBorderColor
+    if cond
+        bx.set_bgcolor(na)
+        bx.set_border_color(na)
+    else
+        bx.set_left(left)
+        bx.set_right(right)
+        bx.set_top(top)
+        bx.set_bottom(bottom)
+        bx.set_bgcolor(bodyColor)
+        bx.set_border_color(borderColor)
+
+//@function Returns auto-selected higher timeframe string.
+selectAutoTimeframe() =>
+    int secondsInTF = timeframe.in_seconds()
+    switch
+        timeframe.isseconds   => "120"
+        secondsInTF < 86400   => "1440"
+        secondsInTF < 604800  => "1W"
+        secondsInTF < 2628003 => "1M"
+        secondsInTF < 7884009 => "3M"
+        => "12M"
+
+//@function Adjusts "1D" to "1440" during extended sessions.
+selectTimeframeFromInput(tf) =>
+    syminfo.session == session.extended and tf == "1D" ? "1440" : tf
+
+//@function Creates an OHLC object from the current bar at the given offset.
+makeOHLC(offset = 0) =>
+    OHLC.new(open[offset], high[offset], low[offset], close[offset], close[offset + 1])
+
+//@function Calculates Heikin Ashi values from OHLC + previous HA values.
+haFrom(o, h, l, c, prevHO, prevHC) =>
+    float haC = (o + h + l + c) / 4
+    float haO = na(prevHO) or na(prevHC) ? (o + c) / 2 : (prevHO + prevHC) / 2
+    float haH = math.max(h, haO, haC)
+    float haL = math.min(l, haO, haC)
+    [haO, haH, haL, haC]
+
+//@function Builds HTF OHLC using chart-based aggregation with optional HA.
+chartOHLC(tf, useHA) =>
+    var float htfOpen   = na
+    var float htfHigh   = na
+    var float htfLow    = na
+    var float prevClose = na
+    var float haClose   = na
+    var float haOpen    = na
+    var float prevHaC   = na
+    var float prevHaO   = na
+    if timeframe.change(tf)
+        htfOpen   := open
+        htfHigh   := high
+        htfLow    := low
+        prevClose := close[1]
+        prevHaO   := haOpen
+        prevHaC   := haClose
+    htfHigh := math.max(high, htfHigh)
+    htfLow  := math.min(low,  htfLow)
+    if useHA
+        [haO, haH, haL, haC] = haFrom(htfOpen, htfHigh, htfLow, close, prevHaO, prevHaC)
+        haOpen  := haO
+        haClose := haC
+        OHLC.new(haO, haH, haL, haC, prevHaC)
+    else
+        OHLC.new(htfOpen, htfHigh, htfLow, close, prevClose)
+
+//@function Returns the price at a given Fibonacci ratio between top and bottom.
+// Ratio 0 = top (highest price), ratio 1 = bottom (lowest price).
+fibPrice(topP, botP, ratio) =>
+    topP - ratio * (topP - botP)
+
+//@function Resolves label style from vertical + horizontal position inputs.
+dowResolveStyle(string vPos) =>
+    switch vPos
+        "Below" => label.style_label_up
+        =>         label.style_label_down   // "Above" — arrow points down from label into box
+
+//@function Resolves label x position from horizontal position input.
+dowResolveX(string hPos, int leftBar, int rightBar) =>
+    switch hPos
+        "Middle" => math.round((leftBar + rightBar) / 2)
+        "Right"  => rightBar
+        =>          leftBar   // "Left"
+
+//@function Returns the day-of-week label text for a given dayofweek value.
+// Uses dayofweek of the bar that OPENS the new box (evening before the named session).
+// Futures boxes open at 6 PM — one calendar day before the session they represent:
+//   Sunday  6 PM → Monday    box → "Liquidity Sweep"
+//   Monday  6 PM → Tuesday   box → "Order Block Rejects"
+//   Tuesday 6 PM → Wednesday box → "Order Block Rejects"
+//   Wednesday 6 PM → Thursday box → "Gap Fill"
+//   Thursday 6 PM → Friday   box → "TGIF"
+dowLabelText(int openDOW) =>
+    switch openDOW
+        dayofweek.sunday    => "📌 Liquidity Sweep"
+        dayofweek.monday    => "🔁 Order Block Rejects"
+        dayofweek.tuesday   => "🔁 Order Block Rejects"
+        dayofweek.wednesday => "⚡ Thursday big swings"
+        dayofweek.thursday  => "🎉 Friday, Use the fibonacci"
+        => ""
+
+// ═══════════════════════════════════════════════════════════════
+// STATE VARIABLES
+// ═══════════════════════════════════════════════════════════════
+var int               prevBarIndex  = bar_index   // TF1
+var int               prevBarIndex2 = bar_index   // TF2
+var int               prevBarIndex3 = bar_index   // TF3
+var string            htfTimeframe  = autoTFInput ? selectAutoTimeframe() : selectTimeframeFromInput(tfInput)
+var string            ticker        = useHaInput  ? ticker.heikinashi(syminfo.tickerid) : syminfo.tickerid
+var array<LevelLines> levelLinesArr = array.new<LevelLines>()
+
+// Pending fib data queued after each closed HTF box
+var array<float> pendingFibTops = array.new<float>()
+var array<float> pendingFibBots = array.new<float>()
+var array<int>   pendingFibBars = array.new<int>()
+
+// Archive of fully-closed fib sets
+var array<FibSet> fibSetsArr  = array.new<FibSet>()
+
+// Active (open) fib sets drawn from last 6 PM
+var array<FibSet> openFibSets = array.new<FibSet>()
+
+// Real-time fib line handles
+var line  rtL000   = na
+var line  rtL100a  = na
+var line  rtL125   = na
+var line  rtL020   = na
+var line  rtL025   = na
+var line  rtL345   = na
+var line  rtL050   = na
+var line  rtL655   = na
+var line  rtL875   = na
+var line  rtL900   = na
+var line  rtL075   = na
+var line  rtL080   = na
+var line  rtL100   = na
+var label rtLbl000 = na
+var label rtLbl100a = na
+var label rtLbl125 = na
+var label rtLbl020 = na
+var label rtLbl025 = na
+var label rtLbl345 = na
+var label rtLbl050 = na
+var label rtLbl655 = na
+var label rtLbl875 = na
+var label rtLbl900 = na
+var label rtLbl075 = na
+var label rtLbl080 = na
+var label rtLbl100 = na
+var box   rtZoneLow  = na
+var box   rtZoneHigh = na
+var bool  _rtInit    = false   // sentinel: RT fib objects created for this period?
+
+// DOW label — live label that tracks the top of the developing box
+var label rtDowLabel     = na
+var int   prevBoxOpenDOW = dayofweek  // DOW when the current open box started
+
+// TF2 order block detection
+var array<TF2BoxInfo> tf2History    = array.new<TF2BoxInfo>()  // rolling last 12 TF2 boxes
+var array<OBEntry>    activeOBs     = array.new<OBEntry>()     // OBs currently extending
+var array<box>        archivedOBs   = array.new<box>()         // snapped OBs kept for lookback
+var array<int>        drawnOBKeys   = array.new<int>()         // leftBar of already-drawn OBs
+
+// Alert state
+var int   lastOBBar  = na    // bar_index when the most recent OB was drawn
+var float prevBoxTop = na    // last closed TF1 box high — for crossover alert
+var float prevBoxBot = na    // last closed TF1 box low  — for crossunder alert
+
+// ═══════════════════════════════════════════════════════════════
+// GET HTF BAR DATA — TF1
+// ═══════════════════════════════════════════════════════════════
+[bar0, bar1] = switch
+    not useDailyInput => [chartOHLC(htfTimeframe, useHaInput), chartOHLC(htfTimeframe, useHaInput)[1]]
+    => request.security(ticker, htfTimeframe, [makeOHLC(0), makeOHLC(1)], lookahead = barmerge.lookahead_on)
+
+// ═══════════════════════════════════════════════════════════════
+// GET HTF BAR DATA — TF2 & TF3  (always via request.security)
+// ═══════════════════════════════════════════════════════════════
+[bar0_tf2, bar1_tf2] = request.security(ticker, tf2Input, [makeOHLC(0), makeOHLC(1)], lookahead = barmerge.lookahead_on)
+[bar0_tf3, bar1_tf3] = request.security(ticker, tf3Input, [makeOHLC(0), makeOHLC(1)], lookahead = barmerge.lookahead_on)
+
+// ═══════════════════════════════════════════════════════════════
+// TF1 GEOMETRY
+// ═══════════════════════════════════════════════════════════════
+bool isNewPeriod = timeframe.change(htfTimeframe)
+bool drawCurrent = barstate.islast and not isNewPeriod
+OHLC bar = drawCurrent ? bar0 : bar1
+bar := na(bar) ? OHLC.new() : bar
+float diff  = bar.c - bar.o
+int   left  = prevBarIndex
+int   right = drawCurrent ? bar_index : bar_index - 1
+[top, bottom] = switch calcTypeInput
+    CalcType.oc => [bar.c, bar.o]
+    CalcType.tr => [math.max(bar.h, bar.prevC), math.min(bar.l, bar.prevC)]
+    =>             [bar.h, bar.l]
+
+// ═══════════════════════════════════════════════════════════════
+// TF2 GEOMETRY
+// ═══════════════════════════════════════════════════════════════
+bool isNewPeriod2 = timeframe.change(tf2Input)
+bool drawCurrent2 = barstate.islast and not isNewPeriod2
+OHLC bar2 = drawCurrent2 ? bar0_tf2 : bar1_tf2
+bar2 := na(bar2) ? OHLC.new() : bar2
+float diff2  = bar2.c - bar2.o
+int   left2  = prevBarIndex2
+int   right2 = drawCurrent2 ? bar_index : bar_index - 1
+[top2, bottom2] = switch calcTypeInput
+    CalcType.oc => [bar2.c, bar2.o]
+    CalcType.tr => [math.max(bar2.h, bar2.prevC), math.min(bar2.l, bar2.prevC)]
+    =>             [bar2.h, bar2.l]
+
+// ═══════════════════════════════════════════════════════════════
+// TF3 GEOMETRY
+// ═══════════════════════════════════════════════════════════════
+bool isNewPeriod3 = timeframe.change(tf3Input)
+bool drawCurrent3 = barstate.islast and not isNewPeriod3
+OHLC bar3 = drawCurrent3 ? bar0_tf3 : bar1_tf3
+bar3 := na(bar3) ? OHLC.new() : bar3
+float diff3  = bar3.c - bar3.o
+int   left3  = prevBarIndex3
+int   right3 = drawCurrent3 ? bar_index : bar_index - 1
+[top3, bottom3] = switch calcTypeInput
+    CalcType.oc => [bar3.c, bar3.o]
+    CalcType.tr => [math.max(bar3.h, bar3.prevC), math.min(bar3.l, bar3.prevC)]
+    =>             [bar3.h, bar3.l]
+
+// ═══════════════════════════════════════════════════════════════
+// SESSION BOUNDARY DETECTION
+// ═══════════════════════════════════════════════════════════════
+bool newSixPM = hour == 18 and (hour[1] != 18 or dayofmonth != dayofmonth[1])
+bool new4PM   = hour == 16 and (hour[1] != 16 or dayofmonth != dayofmonth[1])
+
+// ═══════════════════════════════════════════════════════════════
+// UTILITY: delete all drawings in a FibSet
+// ═══════════════════════════════════════════════════════════════
+deleteFibSet(FibSet fs) =>
+    if not na(fs.l000)
+        line.delete(fs.l000)
+    if not na(fs.l100a)
+        line.delete(fs.l100a)
+    if not na(fs.l125)
+        line.delete(fs.l125)
+    if not na(fs.l020)
+        line.delete(fs.l020)
+    if not na(fs.l025)
+        line.delete(fs.l025)
+    if not na(fs.l345)
+        line.delete(fs.l345)
+    if not na(fs.l050)
+        line.delete(fs.l050)
+    if not na(fs.l655)
+        line.delete(fs.l655)
+    if not na(fs.l875)
+        line.delete(fs.l875)
+    if not na(fs.l900)
+        line.delete(fs.l900)
+    if not na(fs.l075)
+        line.delete(fs.l075)
+    if not na(fs.l080)
+        line.delete(fs.l080)
+    if not na(fs.l100)
+        line.delete(fs.l100)
+    if not na(fs.zoneLow)
+        box.delete(fs.zoneLow)
+    if not na(fs.zoneHigh)
+        box.delete(fs.zoneHigh)
+    if not na(fs.lb000)
+        label.delete(fs.lb000)
+    if not na(fs.lb100a)
+        label.delete(fs.lb100a)
+    if not na(fs.lb125)
+        label.delete(fs.lb125)
+    if not na(fs.lb020)
+        label.delete(fs.lb020)
+    if not na(fs.lb025)
+        label.delete(fs.lb025)
+    if not na(fs.lb345)
+        label.delete(fs.lb345)
+    if not na(fs.lb050)
+        label.delete(fs.lb050)
+    if not na(fs.lb655)
+        label.delete(fs.lb655)
+    if not na(fs.lb875)
+        label.delete(fs.lb875)
+    if not na(fs.lb900)
+        label.delete(fs.lb900)
+    if not na(fs.lb075)
+        label.delete(fs.lb075)
+    if not na(fs.lb080)
+        label.delete(fs.lb080)
+    if not na(fs.lb100)
+        label.delete(fs.lb100)
+
+// ═══════════════════════════════════════════════════════════════
+// UTILITY: snap all right-edges of an open FibSet to a given bar
+// ═══════════════════════════════════════════════════════════════
+snapFibRight(FibSet fs, int x2) =>
+    if not na(fs.l000)
+        fs.l000.set_x2(x2)
+    if not na(fs.l100a)
+        fs.l100a.set_x2(x2)
+    if not na(fs.l125)
+        fs.l125.set_x2(x2)
+    if not na(fs.l020)
+        fs.l020.set_x2(x2)
+    if not na(fs.l025)
+        fs.l025.set_x2(x2)
+    if not na(fs.l345)
+        fs.l345.set_x2(x2)
+    if not na(fs.l050)
+        fs.l050.set_x2(x2)
+    if not na(fs.l655)
+        fs.l655.set_x2(x2)
+    if not na(fs.l875)
+        fs.l875.set_x2(x2)
+    if not na(fs.l900)
+        fs.l900.set_x2(x2)
+    if not na(fs.l075)
+        fs.l075.set_x2(x2)
+    if not na(fs.l080)
+        fs.l080.set_x2(x2)
+    if not na(fs.l100)
+        fs.l100.set_x2(x2)
+    if not na(fs.zoneLow)
+        fs.zoneLow.set_right(x2)
+    if not na(fs.zoneHigh)
+        fs.zoneHigh.set_right(x2)
+    if not na(fs.lb000)
+        fs.lb000.set_x(x2)
+    if not na(fs.lb100a)
+        fs.lb100a.set_x(x2)
+    if not na(fs.lb125)
+        fs.lb125.set_x(x2)
+    if not na(fs.lb020)
+        fs.lb020.set_x(x2)
+    if not na(fs.lb025)
+        fs.lb025.set_x(x2)
+    if not na(fs.lb345)
+        fs.lb345.set_x(x2)
+    if not na(fs.lb050)
+        fs.lb050.set_x(x2)
+    if not na(fs.lb655)
+        fs.lb655.set_x(x2)
+    if not na(fs.lb875)
+        fs.lb875.set_x(x2)
+    if not na(fs.lb900)
+        fs.lb900.set_x(x2)
+    if not na(fs.lb075)
+        fs.lb075.set_x(x2)
+    if not na(fs.lb080)
+        fs.lb080.set_x(x2)
+    if not na(fs.lb100)
+        fs.lb100.set_x(x2)
+
+// ═══════════════════════════════════════════════════════════════
+// UTILITY: draw one complete FibSet for a bar window + price range
+// ═══════════════════════════════════════════════════════════════
+drawFibSet(int x1, int x2, float fibTop, float fibBot) =>
+    string  fls     = lineStyleResolved(fibLineStyleInput)
+    int     fw      = fibLineWidthInput
+    extMode         = fibExtendInput ? extend.right : extend.none
+
+    float p000  = fibPrice(fibTop, fibBot, 0.000)
+    float p100a = fibPrice(fibTop, fibBot, 0.100)
+    float p020  = fibPrice(fibTop, fibBot, 0.200)
+    float p025  = fibPrice(fibTop, fibBot, 0.250)
+    float p125  = fibPrice(fibTop, fibBot, 0.125)
+    float p345  = fibPrice(fibTop, fibBot, 0.345)
+    float p050  = fibPrice(fibTop, fibBot, 0.500)
+    float p655  = fibPrice(fibTop, fibBot, 0.655)
+    float p875  = fibPrice(fibTop, fibBot, 0.875)
+    float p900  = fibPrice(fibTop, fibBot, 0.900)
+    float p075  = fibPrice(fibTop, fibBot, 0.750)
+    float p080  = fibPrice(fibTop, fibBot, 0.800)
+    float p100  = fibPrice(fibTop, fibBot, 1.000)
+
+    line ln000  = showFibLinesInput ? line.new(x1, p000,  x2, p000,  color = fib000ColorInput,  width = fw, style = fls, extend = extMode) : na
+    line ln100a = showFibLinesInput ? line.new(x1, p100a, x2, p100a, color = fib100aColorInput,  width = fw, style = fls, extend = extMode) : na
+    line ln125  = showFibLinesInput ? line.new(x1, p125,  x2, p125,  color = fib125ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln020  = showFibLinesInput ? line.new(x1, p020,  x2, p020,  color = fib020ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln025  = showFibLinesInput ? line.new(x1, p025,  x2, p025,  color = fib025ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln345  = showFibLinesInput ? line.new(x1, p345,  x2, p345,  color = fib345ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln050  = showFibLinesInput ? line.new(x1, p050,  x2, p050,  color = fib050ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln655  = showFibLinesInput ? line.new(x1, p655,  x2, p655,  color = fib655ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln875  = showFibLinesInput ? line.new(x1, p875,  x2, p875,  color = fib875ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln900  = showFibLinesInput ? line.new(x1, p900,  x2, p900,  color = fib900ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln075  = showFibLinesInput ? line.new(x1, p075,  x2, p075,  color = fib075ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln080  = showFibLinesInput ? line.new(x1, p080,  x2, p080,  color = fib080ColorInput,   width = fw, style = fls, extend = extMode) : na
+    line ln100  = showFibLinesInput ? line.new(x1, p100,  x2, p100,  color = fib100ColorInput,   width = fw, style = fls, extend = extMode) : na
+
+    box bZoneLow  = na
+    box bZoneHigh = na
+    if showZoneLowInput
+        bZoneLow := box.new(x1, p020, x2, p025, bgcolor = zoneLowColorInput,  border_color = na, extend = extMode)
+    if showZoneHighInput
+        bZoneHigh := box.new(x1, p075, x2, p080, bgcolor = zoneHighColorInput, border_color = na, extend = extMode)
+
+    label lbl000  = na
+    label lbl100a = na
+    label lbl125  = na
+    label lbl020  = na
+    label lbl025  = na
+    label lbl345  = na
+    label lbl050  = na
+    label lbl655  = na
+    label lbl875  = na
+    label lbl900  = na
+    label lbl075  = na
+    label lbl080  = na
+    label lbl100  = na
+    if showFibLabelsInput
+        lbl000  := label.new(x2, p000,  "0.000", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib000ColorInput,  size = size.small)
+        lbl100a := label.new(x2, p100a, "0.100", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib100aColorInput,  size = size.small)
+        lbl125  := label.new(x2, p125,  "0.125", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib125ColorInput,   size = size.small)
+        lbl020  := label.new(x2, p020,  "0.200", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib020ColorInput,   size = size.small)
+        lbl025  := label.new(x2, p025,  "0.250", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib025ColorInput,   size = size.small)
+        lbl345  := label.new(x2, p345,  "0.345", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib345ColorInput,   size = size.small)
+        lbl050  := label.new(x2, p050,  "0.500", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib050ColorInput,   size = size.small)
+        lbl655  := label.new(x2, p655,  "0.655", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib655ColorInput,   size = size.small)
+        lbl875  := label.new(x2, p875,  "0.875", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib875ColorInput,   size = size.small)
+        lbl900  := label.new(x2, p900,  "0.900", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib900ColorInput,   size = size.small)
+        lbl075  := label.new(x2, p075,  "0.750", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib075ColorInput,   size = size.small)
+        lbl080  := label.new(x2, p080,  "0.800", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib080ColorInput,   size = size.small)
+        lbl100  := label.new(x2, p100,  "1.000", style = label.style_label_left, color = color.new(color.black, 100), textcolor = fib100ColorInput,   size = size.small)
+
+    FibSet.new(
+         ln000, ln020, ln025, ln100a, ln125, ln345, ln050, ln655, ln875, ln900, ln075, ln080, ln100,
+         bZoneLow, bZoneHigh,
+         lbl000, lbl020, lbl025, lbl100a, lbl125, lbl345, lbl050, lbl655, lbl875, lbl900, lbl075, lbl080, lbl100)
+
+// ═══════════════════════════════════════════════════════════════
+// TF1: ON EACH NEW PERIOD — draw closed box, level lines, queue fibs
+// ═══════════════════════════════════════════════════════════════
+if isNewPeriod
+    prevBarIndex := bar_index
+
+    // ── Draw the closed HTF box ──────────────────────────────
+    box htBar = box.new(na, na, na, na)
+    htBar.setBox(false, left, right, top, bottom, diff,
+         upBodyColorInput, dnBodyColorInput, upBorderColorInput, dnBorderColorInput)
+
+    if calcTypeInput == CalcType.ohlc
+        box htBody = box.new(na, na, na, na)
+        htBody.setBox(false, left, right, bar.o, bar.c, diff,
+             upBodyColorInput, dnBodyColorInput, upBorderColorInput, dnBorderColorInput)
+
+    // ── DOW label pinned to top of the CLOSED box (fixed) ───
+    if showDowLabelsInput
+        string closedTxt = dowLabelText(prevBoxOpenDOW)
+        if str.length(closedTxt) > 0
+            int    lx  = dowResolveX(dowHPosInput, left, right)
+            float  ly  = dowVPosInput == "Below" ? bottom : top
+            string lst = dowResolveStyle(dowVPosInput)
+            label.new(lx, ly, closedTxt,
+                 style     = lst,
+                 color     = dowLabelBgInput,
+                 textcolor = dowLabelColorInput,
+                 size      = size.small)
+
+    // ── Create live DOW label for the NEW opening box ────────
+    // Delete the previous live label first, then create a fresh one.
+    if not na(rtDowLabel)
+        label.delete(rtDowLabel)
+        rtDowLabel := na
+    prevBoxOpenDOW := dayofweek   // record DOW for the box now opening
+    if showDowLabelsInput
+        string newTxt = dowLabelText(dayofweek)
+        if str.length(newTxt) > 0
+            float  ly2  = dowVPosInput == "Below" ? open : open
+            string lst2 = dowResolveStyle(dowVPosInput)
+            rtDowLabel := label.new(bar_index, open, newTxt,
+                 style     = lst2,
+                 color     = dowLabelBgInput,
+                 textcolor = dowLabelColorInput,
+                 size      = size.small)
+
+    // ── Draw top/bottom level lines ──────────────────────────
+    if array.size(levelLinesArr) > 0
+        for ll in levelLinesArr
+            if not na(ll.topLine)
+                ll.topLine.set_x2(bar_index)
+            if not na(ll.botLine)
+                ll.botLine.set_x2(bar_index)
+
+    line newTop = na
+    line newBot = na
+    string lstyle = lineStyleResolved(lineStyleInput)
+
+    if showTopLineInput and not na(top)
+        newTop := line.new(left, top, bar_index, top,
+             color = topLineColorInput, width = lineWidthInput, style = lstyle, extend = extend.right)
+
+    if showBotLineInput and not na(bottom)
+        newBot := line.new(left, bottom, bar_index, bottom,
+             color = botLineColorInput, width = lineWidthInput, style = lstyle, extend = extend.right)
+
+    array.push(levelLinesArr, LevelLines.new(newTop, newBot))
+    if array.size(levelLinesArr) > lookbackInput
+        LevelLines oldest = array.shift(levelLinesArr)
+        if not na(oldest.topLine)
+            line.delete(oldest.topLine)
+        if not na(oldest.botLine)
+            line.delete(oldest.botLine)
+
+    // ── Queue this closed box's fib data for next 6 PM render ─
+    if showFibInput and not na(top) and not na(bottom)
+        array.push(pendingFibTops, top)
+        array.push(pendingFibBots, bottom)
+        array.push(pendingFibBars, bar_index)
+        while array.size(pendingFibTops) > fibLookbackInput
+            array.shift(pendingFibTops)
+            array.shift(pendingFibBots)
+            array.shift(pendingFibBars)
+
+    // ── Store closed box levels for crossover alert ───────────
+    prevBoxTop := top
+    prevBoxBot := bottom
+
+// ═══════════════════════════════════════════════════════════════
+// TF2: ON EACH NEW PERIOD — draw closed boxes + detect order blocks
+// ═══════════════════════════════════════════════════════════════
+if isNewPeriod2
+    prevBarIndex2 := bar_index
+    if showTF2Input
+        box htBar2 = box.new(na, na, na, na)
+        htBar2.setBox(false, left2, right2, top2, bottom2, diff2,
+             tf2UpBodyColor, tf2DnBodyColor, tf2UpBorderColor, tf2DnBorderColor)
+        if calcTypeInput == CalcType.ohlc
+            box htBody2 = box.new(na, na, na, na)
+            htBody2.setBox(false, left2, right2, bar2.o, bar2.c, diff2,
+                 tf2UpBodyColor, tf2DnBodyColor, tf2UpBorderColor, tf2DnBorderColor)
+
+    // ── Store closed TF2 box in history (cap at 12) ──────────
+    bool tf2IsUp2 = diff2 >= 0
+    array.push(tf2History, TF2BoxInfo.new(tf2IsUp2, top2, bottom2, left2, right2))
+    if array.size(tf2History) > 12
+        array.shift(tf2History)
+
+    // ── Order Block Detection ────────────────────────────────
+    // Pattern: [≥2 same dir] → [1–2 opposite dir = OB] → [≥2 same dir confirmed]
+    // The OB candles are the 1–2 opposite-direction boxes in the middle.
+    if showOBInput and array.size(tf2History) >= 5
+        int  n          = array.size(tf2History)
+
+        // --- Check BEARISH OB (green OB inside red context) ---
+        // Step 1: count trailing reds (confirmation)
+        int trailRed = 0
+        for i = n - 1 to 0
+            if not array.get(tf2History, i).isUp
+                trailRed += 1
+            else
+                break
+        // Step 2: count green OB candles just before trailing reds
+        int obGreenCount = 0
+        if trailRed >= 2
+            int obStart = n - 1 - trailRed
+            for i = obStart to 0
+                if array.get(tf2History, i).isUp
+                    obGreenCount += 1
+                else
+                    break
+        // Step 3: count leading reds before the OB greens
+        int leadRed = 0
+        if trailRed >= 2 and obGreenCount >= 1 and obGreenCount <= 2
+            int leadStart = n - 1 - trailRed - obGreenCount
+            for i = leadStart to 0
+                if not array.get(tf2History, i).isUp
+                    leadRed += 1
+                else
+                    break
+        // Step 4: draw if pattern confirmed and not already drawn
+        if trailRed >= 2 and obGreenCount >= 1 and obGreenCount <= 2 and leadRed >= 2
+            int obIdxFirst = n - 1 - trailRed - obGreenCount + 1
+            int obIdxLast  = n - 1 - trailRed
+            TF2BoxInfo firstOB = array.get(tf2History, obIdxFirst)
+            TF2BoxInfo lastOB  = array.get(tf2History, obIdxLast)
+            int obLeftBar = firstOB.leftBar
+            if array.indexof(drawnOBKeys, obLeftBar) < 0
+                float obHi = firstOB.hi
+                float obLo = firstOB.lo
+                for k = obIdxFirst to obIdxLast
+                    TF2BoxInfo b = array.get(tf2History, k)
+                    obHi := math.max(obHi, b.hi)
+                    obLo := math.min(obLo, b.lo)
+                // Enforce total cap (active + archived) before drawing
+                while array.size(activeOBs) + array.size(archivedOBs) >= obLookbackInput
+                    if array.size(archivedOBs) > 0
+                        box.delete(array.shift(archivedOBs))
+                    else if array.size(activeOBs) > 0
+                        OBEntry oldest = array.shift(activeOBs)
+                        box.delete(oldest.bx)
+                    else
+                        break
+                box newOB = box.new(obLeftBar, obHi, bar_index, obLo,
+                     bgcolor = bearOBColor, border_color = bearOBBorder, border_width = obBorderWidth)
+                array.push(activeOBs, OBEntry.new(newOB))
+                lastOBBar := bar_index
+                array.push(drawnOBKeys, obLeftBar)
+                if array.size(drawnOBKeys) > 50
+                    array.shift(drawnOBKeys)
+
+        // --- Check BULLISH OB (red OB inside green context) ---
+        int trailGrn = 0
+        for i = n - 1 to 0
+            if array.get(tf2History, i).isUp
+                trailGrn += 1
+            else
+                break
+        int obRedCount = 0
+        if trailGrn >= 2
+            int obStart2 = n - 1 - trailGrn
+            for i = obStart2 to 0
+                if not array.get(tf2History, i).isUp
+                    obRedCount += 1
+                else
+                    break
+        int leadGrn = 0
+        if trailGrn >= 2 and obRedCount >= 1 and obRedCount <= 2
+            int leadStart2 = n - 1 - trailGrn - obRedCount
+            for i = leadStart2 to 0
+                if array.get(tf2History, i).isUp
+                    leadGrn += 1
+                else
+                    break
+        if trailGrn >= 2 and obRedCount >= 1 and obRedCount <= 2 and leadGrn >= 2
+            int obIdxFirst2 = n - 1 - trailGrn - obRedCount + 1
+            int obIdxLast2  = n - 1 - trailGrn
+            TF2BoxInfo firstOB2 = array.get(tf2History, obIdxFirst2)
+            TF2BoxInfo lastOB2  = array.get(tf2History, obIdxLast2)
+            int obLeftBar2 = firstOB2.leftBar
+            if array.indexof(drawnOBKeys, obLeftBar2) < 0
+                float obHi2 = firstOB2.hi
+                float obLo2 = firstOB2.lo
+                for k2 = obIdxFirst2 to obIdxLast2
+                    TF2BoxInfo b2 = array.get(tf2History, k2)
+                    obHi2 := math.max(obHi2, b2.hi)
+                    obLo2 := math.min(obLo2, b2.lo)
+                // Enforce total cap (active + archived) before drawing
+                while array.size(activeOBs) + array.size(archivedOBs) >= obLookbackInput
+                    if array.size(archivedOBs) > 0
+                        box.delete(array.shift(archivedOBs))
+                    else if array.size(activeOBs) > 0
+                        OBEntry oldest = array.shift(activeOBs)
+                        box.delete(oldest.bx)
+                    else
+                        break
+                box newOB2 = box.new(obLeftBar2, obHi2, bar_index, obLo2,
+                     bgcolor = bullOBColor, border_color = bullOBBorder, border_width = obBorderWidth)
+                array.push(activeOBs, OBEntry.new(newOB2))
+                lastOBBar := bar_index
+                array.push(drawnOBKeys, obLeftBar2)
+                if array.size(drawnOBKeys) > 50
+                    array.shift(drawnOBKeys)
+
+// ═══════════════════════════════════════════════════════════════
+// TF3: ON EACH NEW PERIOD — draw closed boxes
+// ═══════════════════════════════════════════════════════════════
+if isNewPeriod3
+    prevBarIndex3 := bar_index
+    if showTF3Input
+        box htBar3 = box.new(na, na, na, na)
+        htBar3.setBox(false, left3, right3, top3, bottom3, diff3,
+             tf3UpBodyColor, tf3DnBodyColor, tf3UpBorderColor, tf3DnBorderColor)
+        if calcTypeInput == CalcType.ohlc
+            box htBody3 = box.new(na, na, na, na)
+            htBody3.setBox(false, left3, right3, bar3.o, bar3.c, diff3,
+                 tf3UpBodyColor, tf3DnBodyColor, tf3UpBorderColor, tf3DnBorderColor)
+
+// ═══════════════════════════════════════════════════════════════
+// AT 6 PM — DELETE all old fib drawings, draw fresh ones; reset OB session
+// ═══════════════════════════════════════════════════════════════
+if newSixPM
+    // Reset TF2 box history so OB pattern counting starts fresh every session
+    array.clear(tf2History)
+    array.clear(drawnOBKeys)
+
+    // Hard failsafe: snap any OBs that survived past 4 PM and archive them.
+    // This ensures OBs NEVER expand into a new session regardless of 4 PM detection.
+    if showOBInput and array.size(activeOBs) > 0
+        for ob in activeOBs
+            ob.bx.set_right(bar_index)
+            array.push(archivedOBs, ob.bx)
+        array.clear(activeOBs)
+        while array.size(archivedOBs) > obLookbackInput
+            box.delete(array.shift(archivedOBs))
+
+if newSixPM and showFibInput
+    if array.size(openFibSets) > 0
+        for fs in openFibSets
+            deleteFibSet(fs)
+        array.clear(openFibSets)
+
+    if array.size(fibSetsArr) > 0
+        for fs in fibSetsArr
+            deleteFibSet(fs)
+        array.clear(fibSetsArr)
+
+    int nPending = array.size(pendingFibTops)
+    if nPending > 0
+        for i = 0 to nPending - 1
+            float ft = array.get(pendingFibTops, i)
+            float fb = array.get(pendingFibBots, i)
+            FibSet fs = drawFibSet(bar_index, bar_index + 1, ft, fb)
+            array.push(openFibSets, fs)
+        array.clear(pendingFibTops)
+        array.clear(pendingFibBots)
+        array.clear(pendingFibBars)
+
+// ═══════════════════════════════════════════════════════════════
+// AT 4 PM — snap fib lines; expire OB sessions
+// ═══════════════════════════════════════════════════════════════
+if new4PM and showFibInput
+    int nOpen = array.size(openFibSets)
+    if nOpen > 0
+        for i = 0 to nOpen - 1
+            FibSet fs = array.get(openFibSets, i)
+            if not fibExtendInput
+                snapFibRight(fs, bar_index)
+            array.push(fibSetsArr, fs)
+        array.clear(openFibSets)
+    while array.size(fibSetsArr) > fibLookbackInput
+        FibSet old = array.shift(fibSetsArr)
+        deleteFibSet(old)
+
+// At 4 PM, snap all active OBs to the session close, archive them, enforce lookback cap.
+if new4PM and showOBInput and array.size(activeOBs) > 0
+    for ob in activeOBs
+        ob.bx.set_right(bar_index)
+        array.push(archivedOBs, ob.bx)
+    array.clear(activeOBs)
+    // Trim archived OBs beyond lookback — delete the oldest boxes
+    while array.size(archivedOBs) > obLookbackInput
+        box old = array.shift(archivedOBs)
+        box.delete(old)
+
+// ═══════════════════════════════════════════════════════════════
+// LIVE UPDATE — extend open fib right-edges to current bar
+// ═══════════════════════════════════════════════════════════════
+if array.size(openFibSets) > 0 and not newSixPM and not new4PM
+    for fs in openFibSets
+        snapFibRight(fs, bar_index)
+
+// ═══════════════════════════════════════════════════════════════
+// REALTIME DEVELOPING BOXES  (TF1, TF2, TF3)
+// ═══════════════════════════════════════════════════════════════
+if barstate.islast
+    // ── Live DOW label — always tracks position on the developing box ──
+    if showDowLabelsInput and not na(rtDowLabel)
+        float  liveY = dowVPosInput == "Below" ? bottom : bar0.h
+        int    liveX = dowResolveX(dowHPosInput, prevBarIndex, bar_index)
+        string liveSt = dowResolveStyle(dowVPosInput)
+        rtDowLabel.set_y(liveY)
+        rtDowLabel.set_x(liveX)
+        rtDowLabel.set_style(liveSt)
+
+    // ── Extend active OB boxes rightward (session-scoped only) ──
+    // Do not extend on 4 PM bar or 6 PM bar — those are handled by their own blocks.
+    if showOBInput and array.size(activeOBs) > 0 and not new4PM and not newSixPM
+        for ob in activeOBs
+            ob.bx.set_right(bar_index)
+
+    // ── TF1 ─────────────────────────────────────────────────
+    var box rtBox = box.new(na, na, na, na)
+    rtBox.setBox(isNewPeriod, left, right, top, bottom, diff,
+         upBodyColorInput, dnBodyColorInput, upBorderColorInput, dnBorderColorInput)
+
+    if calcTypeInput == CalcType.ohlc
+        var box rtBody = box.new(na, na, na, na)
+        rtBody.setBox(isNewPeriod, left, right, bar.o, bar.c, diff,
+             upBodyColorInput, dnBodyColorInput, upBorderColorInput, dnBorderColorInput)
+
+    // ── TF2 ─────────────────────────────────────────────────
+    var box rtBox2 = box.new(na, na, na, na)
+    rtBox2.setBox(not showTF2Input or isNewPeriod2, left2, right2, top2, bottom2, diff2,
+         tf2UpBodyColor, tf2DnBodyColor, tf2UpBorderColor, tf2DnBorderColor)
+
+    if showTF2Input and calcTypeInput == CalcType.ohlc
+        var box rtBody2 = box.new(na, na, na, na)
+        rtBody2.setBox(isNewPeriod2, left2, right2, bar2.o, bar2.c, diff2,
+             tf2UpBodyColor, tf2DnBodyColor, tf2UpBorderColor, tf2DnBorderColor)
+
+    // ── TF3 ─────────────────────────────────────────────────
+    var box rtBox3 = box.new(na, na, na, na)
+    rtBox3.setBox(not showTF3Input or isNewPeriod3, left3, right3, top3, bottom3, diff3,
+         tf3UpBodyColor, tf3DnBodyColor, tf3UpBorderColor, tf3DnBorderColor)
+
+    if showTF3Input and calcTypeInput == CalcType.ohlc
+        var box rtBody3 = box.new(na, na, na, na)
+        rtBody3.setBox(isNewPeriod3, left3, right3, bar3.o, bar3.c, diff3,
+             tf3UpBodyColor, tf3DnBodyColor, tf3UpBorderColor, tf3DnBorderColor)
+
+// ═══════════════════════════════════════════════════════════════
+// REAL-TIME FIB — reset sentinel & wipe objects on new period
+// ═══════════════════════════════════════════════════════════════
+if isNewPeriod
+    _rtInit := false
+
+    if showRtFibInput
+        if not na(rtL000)
+            line.delete(rtL000)
+            rtL000 := na
+        if not na(rtL100a)
+            line.delete(rtL100a)
+            rtL100a := na
+        if not na(rtL125)
+            line.delete(rtL125)
+            rtL125 := na
+        if not na(rtL020)
+            line.delete(rtL020)
+            rtL020 := na
+        if not na(rtL025)
+            line.delete(rtL025)
+            rtL025 := na
+        if not na(rtL345)
+            line.delete(rtL345)
+            rtL345 := na
+        if not na(rtL050)
+            line.delete(rtL050)
+            rtL050 := na
+        if not na(rtL655)
+            line.delete(rtL655)
+            rtL655 := na
+        if not na(rtL875)
+            line.delete(rtL875)
+            rtL875 := na
+        if not na(rtL900)
+            line.delete(rtL900)
+            rtL900 := na
+        if not na(rtL075)
+            line.delete(rtL075)
+            rtL075 := na
+        if not na(rtL080)
+            line.delete(rtL080)
+            rtL080 := na
+        if not na(rtL100)
+            line.delete(rtL100)
+            rtL100 := na
+        if not na(rtLbl000)
+            label.delete(rtLbl000)
+            rtLbl000 := na
+        if not na(rtLbl100a)
+            label.delete(rtLbl100a)
+            rtLbl100a := na
+        if not na(rtLbl125)
+            label.delete(rtLbl125)
+            rtLbl125 := na
+        if not na(rtLbl020)
+            label.delete(rtLbl020)
+            rtLbl020 := na
+        if not na(rtLbl025)
+            label.delete(rtLbl025)
+            rtLbl025 := na
+        if not na(rtLbl345)
+            label.delete(rtLbl345)
+            rtLbl345 := na
+        if not na(rtLbl050)
+            label.delete(rtLbl050)
+            rtLbl050 := na
+        if not na(rtLbl655)
+            label.delete(rtLbl655)
+            rtLbl655 := na
+        if not na(rtLbl875)
+            label.delete(rtLbl875)
+            rtLbl875 := na
+        if not na(rtLbl900)
+            label.delete(rtLbl900)
+            rtLbl900 := na
+        if not na(rtLbl075)
+            label.delete(rtLbl075)
+            rtLbl075 := na
+        if not na(rtLbl080)
+            label.delete(rtLbl080)
+            rtLbl080 := na
+        if not na(rtLbl100)
+            label.delete(rtLbl100)
+            rtLbl100 := na
+        if not na(rtZoneLow)
+            box.delete(rtZoneLow)
+            rtZoneLow := na
+        if not na(rtZoneHigh)
+            box.delete(rtZoneHigh)
+            rtZoneHigh := na
+
+// ═══════════════════════════════════════════════════════════════
+// REAL-TIME FIB — draw / update on the live developing bar
+// ═══════════════════════════════════════════════════════════════
+if showRtFibInput and barstate.islast and not isNewPeriod
+    float rtHigh = bar0.h
+    float rtLow  = bar0.l
+
+    if not na(rtHigh) and not na(rtLow) and rtHigh != rtLow
+        float rtRange = rtHigh - rtLow
+
+        float rp000  = rtLow
+        float rp100a = rtLow + 0.100 * rtRange
+        float rp125  = rtLow + 0.125 * rtRange
+        float rp020  = rtLow + 0.200 * rtRange
+        float rp025  = rtLow + 0.250 * rtRange
+        float rp345  = rtLow + 0.345 * rtRange
+        float rp050  = rtLow + 0.500 * rtRange
+        float rp655  = rtLow + 0.655 * rtRange
+        float rp875  = rtLow + 0.875 * rtRange
+        float rp900  = rtLow + 0.900 * rtRange
+        float rp075  = rtLow + 0.750 * rtRange
+        float rp080  = rtLow + 0.800 * rtRange
+        float rp100  = rtHigh
+
+        int    rx1  = prevBarIndex
+        int    rx2  = bar_index
+        string rfls = lineStyleResolved(rtLineStyleInput)
+        int    rfw  = rtLineWidthInput
+
+        if not _rtInit
+            _rtInit := true
+
+            if showRtLinesInput
+                rtL000  := line.new(rx1, rp000,  rx2, rp000,  color = rtFib000Color,  width = rfw, style = rfls)
+                rtL100a := line.new(rx1, rp100a, rx2, rp100a, color = rtFib100aColor,  width = rfw, style = rfls)
+                rtL125  := line.new(rx1, rp125,  rx2, rp125,  color = rtFib125Color,   width = rfw, style = rfls)
+                rtL020  := line.new(rx1, rp020,  rx2, rp020,  color = rtFib020Color,   width = rfw, style = rfls)
+                rtL025  := line.new(rx1, rp025,  rx2, rp025,  color = rtFib025Color,   width = rfw, style = rfls)
+                rtL345  := line.new(rx1, rp345,  rx2, rp345,  color = rtFib345Color,   width = rfw, style = rfls)
+                rtL050  := line.new(rx1, rp050,  rx2, rp050,  color = rtFib050Color,   width = rfw, style = rfls)
+                rtL655  := line.new(rx1, rp655,  rx2, rp655,  color = rtFib655Color,   width = rfw, style = rfls)
+                rtL875  := line.new(rx1, rp875,  rx2, rp875,  color = rtFib875Color,   width = rfw, style = rfls)
+                rtL900  := line.new(rx1, rp900,  rx2, rp900,  color = rtFib900Color,   width = rfw, style = rfls)
+                rtL075  := line.new(rx1, rp075,  rx2, rp075,  color = rtFib075Color,   width = rfw, style = rfls)
+                rtL080  := line.new(rx1, rp080,  rx2, rp080,  color = rtFib080Color,   width = rfw, style = rfls)
+                rtL100  := line.new(rx1, rp100,  rx2, rp100,  color = rtFib100Color,   width = rfw, style = rfls)
+
+            if showRtZoneLowInput
+                rtZoneLow  := box.new(rx1, rp020, rx2, rp025, bgcolor = rtZoneLowColorInput,  border_color = na)
+            if showRtZoneHighInput
+                rtZoneHigh := box.new(rx1, rp075, rx2, rp080, bgcolor = rtZoneHighColorInput, border_color = na)
+
+            if showRtLabelsInput
+                rtLbl000  := label.new(rx2, rp000,  "0.000 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib000Color,  size = size.small)
+                rtLbl100a := label.new(rx2, rp100a, "0.100 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib100aColor,  size = size.small)
+                rtLbl125  := label.new(rx2, rp125,  "0.125 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib125Color,   size = size.small)
+                rtLbl020  := label.new(rx2, rp020,  "0.200 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib020Color,   size = size.small)
+                rtLbl025  := label.new(rx2, rp025,  "0.250 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib025Color,   size = size.small)
+                rtLbl345  := label.new(rx2, rp345,  "0.345 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib345Color,   size = size.small)
+                rtLbl050  := label.new(rx2, rp050,  "0.500 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib050Color,   size = size.small)
+                rtLbl655  := label.new(rx2, rp655,  "0.655 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib655Color,   size = size.small)
+                rtLbl875  := label.new(rx2, rp875,  "0.875 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib875Color,   size = size.small)
+                rtLbl900  := label.new(rx2, rp900,  "0.900 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib900Color,   size = size.small)
+                rtLbl075  := label.new(rx2, rp075,  "0.750 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib075Color,   size = size.small)
+                rtLbl080  := label.new(rx2, rp080,  "0.800 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib080Color,   size = size.small)
+                rtLbl100  := label.new(rx2, rp100,  "1.000 ᴿᵀ", style = label.style_label_left, color = color.new(color.black, 100), textcolor = rtFib100Color,   size = size.small)
+
+        else
+            if not na(rtL000)
+                rtL000.set_y1(rp000)
+                rtL000.set_y2(rp000)
+                rtL000.set_x1(rx1)
+                rtL000.set_x2(rx2)
+            if not na(rtL100a)
+                rtL100a.set_y1(rp100a)
+                rtL100a.set_y2(rp100a)
+                rtL100a.set_x1(rx1)
+                rtL100a.set_x2(rx2)
+            if not na(rtL125)
+                rtL125.set_y1(rp125)
+                rtL125.set_y2(rp125)
+                rtL125.set_x1(rx1)
+                rtL125.set_x2(rx2)
+            if not na(rtL020)
+                rtL020.set_y1(rp020)
+                rtL020.set_y2(rp020)
+                rtL020.set_x1(rx1)
+                rtL020.set_x2(rx2)
+            if not na(rtL025)
+                rtL025.set_y1(rp025)
+                rtL025.set_y2(rp025)
+                rtL025.set_x1(rx1)
+                rtL025.set_x2(rx2)
+            if not na(rtL345)
+                rtL345.set_y1(rp345)
+                rtL345.set_y2(rp345)
+                rtL345.set_x1(rx1)
+                rtL345.set_x2(rx2)
+            if not na(rtL050)
+                rtL050.set_y1(rp050)
+                rtL050.set_y2(rp050)
+                rtL050.set_x1(rx1)
+                rtL050.set_x2(rx2)
+            if not na(rtL655)
+                rtL655.set_y1(rp655)
+                rtL655.set_y2(rp655)
+                rtL655.set_x1(rx1)
+                rtL655.set_x2(rx2)
+            if not na(rtL875)
+                rtL875.set_y1(rp875)
+                rtL875.set_y2(rp875)
+                rtL875.set_x1(rx1)
+                rtL875.set_x2(rx2)
+            if not na(rtL900)
+                rtL900.set_y1(rp900)
+                rtL900.set_y2(rp900)
+                rtL900.set_x1(rx1)
+                rtL900.set_x2(rx2)
+            if not na(rtL075)
+                rtL075.set_y1(rp075)
+                rtL075.set_y2(rp075)
+                rtL075.set_x1(rx1)
+                rtL075.set_x2(rx2)
+            if not na(rtL080)
+                rtL080.set_y1(rp080)
+                rtL080.set_y2(rp080)
+                rtL080.set_x1(rx1)
+                rtL080.set_x2(rx2)
+            if not na(rtL100)
+                rtL100.set_y1(rp100)
+                rtL100.set_y2(rp100)
+                rtL100.set_x1(rx1)
+                rtL100.set_x2(rx2)
+
+            if not na(rtZoneLow)
+                rtZoneLow.set_top(rp020)
+                rtZoneLow.set_bottom(rp025)
+                rtZoneLow.set_left(rx1)
+                rtZoneLow.set_right(rx2)
+            if not na(rtZoneHigh)
+                rtZoneHigh.set_top(rp075)
+                rtZoneHigh.set_bottom(rp080)
+                rtZoneHigh.set_left(rx1)
+                rtZoneHigh.set_right(rx2)
+
+            if showRtLabelsInput
+                if not na(rtLbl000)
+                    rtLbl000.set_y(rp000)
+                    rtLbl000.set_x(rx2)
+                if not na(rtLbl100a)
+                    rtLbl100a.set_y(rp100a)
+                    rtLbl100a.set_x(rx2)
+                if not na(rtLbl125)
+                    rtLbl125.set_y(rp125)
+                    rtLbl125.set_x(rx2)
+                if not na(rtLbl020)
+                    rtLbl020.set_y(rp020)
+                    rtLbl020.set_x(rx2)
+                if not na(rtLbl025)
+                    rtLbl025.set_y(rp025)
+                    rtLbl025.set_x(rx2)
+                if not na(rtLbl345)
+                    rtLbl345.set_y(rp345)
+                    rtLbl345.set_x(rx2)
+                if not na(rtLbl050)
+                    rtLbl050.set_y(rp050)
+                    rtLbl050.set_x(rx2)
+                if not na(rtLbl655)
+                    rtLbl655.set_y(rp655)
+                    rtLbl655.set_x(rx2)
+                if not na(rtLbl875)
+                    rtLbl875.set_y(rp875)
+                    rtLbl875.set_x(rx2)
+                if not na(rtLbl900)
+                    rtLbl900.set_y(rp900)
+                    rtLbl900.set_x(rx2)
+                if not na(rtLbl075)
+                    rtLbl075.set_y(rp075)
+                    rtLbl075.set_x(rx2)
+                if not na(rtLbl080)
+                    rtLbl080.set_y(rp080)
+                    rtLbl080.set_x(rx2)
+                if not na(rtLbl100)
+                    rtLbl100.set_y(rp100)
+                    rtLbl100.set_x(rx2)
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+
+// ── Alert 1: New Order Block formed ─────────────────────────
+// Fires on the bar where a new OB was detected and drawn.
+bool obFormedAlert = showOBInput and (bar_index == lastOBBar)
+
+alertcondition(obFormedAlert,
+     title   = "Order Block Formed",
+     message = "🟦 {{ticker}} ({{interval}}) — New Order Block detected at {{close}}")
+
+// ── Alert 2: Opens inside OB, closes outside (rejection) ────
+// Price opened inside an active OB zone but closed beyond it —
+// signals the OB was tested and rejected, or that a clean break occurred.
+bool obRejectionAlert = false
+if showOBInput and array.size(activeOBs) > 0
+    for ob in activeOBs
+        float obHiLevel = ob.bx.get_top()
+        float obLoLevel = ob.bx.get_bottom()
+        bool  openInside  = open  >= obLoLevel and open  <= obHiLevel
+        bool  closeOutside = close < obLoLevel or  close > obHiLevel
+        if openInside and closeOutside
+            obRejectionAlert := true
+
+alertcondition(obRejectionAlert,
+     title   = "OB Open Inside / Close Outside",
+     message = "⚠️ {{ticker}} ({{interval}}) — Candle opened inside Order Block but closed outside at {{close}}")
+
+// ── Alert 3: Price crosses previous TF1 box High or Low ─────
+// Fires when chart close crosses above the prior daily box high
+// or crosses below the prior daily box low.
+bool crossAbovePrevHigh = not na(prevBoxTop) and close > prevBoxTop and close[1] <= prevBoxTop
+bool crossBelowPrevLow  = not na(prevBoxBot) and close < prevBoxBot and close[1] >= prevBoxBot
+bool prevBoxCrossAlert  = crossAbovePrevHigh or crossBelowPrevLow
+
+alertcondition(prevBoxCrossAlert,
+     title   = "Price Crossed Previous Box High/Low",
+     message = "🚨 {{ticker}} ({{interval}}) — Price crossed previous daily box high/low at {{close}}")
+
+// ── Alert 4: RT Fib 0.500 Touch (existing) ──────────────────
+float rt050Level = na
+if not isNewPeriod and not na(bar0.h) and not na(bar0.l) and bar0.h != bar0.l
+    rt050Level := bar0.l + 0.500 * (bar0.h - bar0.l)
+
+bool touches050 = showRtFibInput
+     and not isNewPeriod
+     and not na(rt050Level)
+     and low  <= rt050Level
+     and high >= rt050Level
+
+alertcondition(touches050,
+     title   = "RT Fib 0.500 Touch",
+     message = "⚡ {{ticker}} ({{interval}}) — price touched the Real-time Fib 0.500 level at {{close}}")
