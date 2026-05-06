@@ -1,0 +1,163 @@
+=================================================================
+PROJECT PAT — ML PIPELINE v3 (MARKET STRUCTURE EDITION)
+=================================================================
+
+Downloading NQ=F 1h ...
+Bars: 13,177  (2023-12-11 to 2026-05-05)
+Detecting order blocks ...
+Computing indicators ...
+Computing market structure ...
+Generating signals, features, and labels ...
+Total labelled signals: 629
+Overall win rate: 51.2%
+
+Win rate by day:
+      Trades  Win_Rate
+_day                  
+Fri       52  0.423077
+Mon      105  0.304762
+Thu      115  0.634783
+Tue      194  0.685567
+Wed      163  0.380368
+
+Total features: 68
+Feature groups:
+  Time:             hour, day_of_week, bar_position
+  Price levels:     dist_pdh/pdl/fib50/ema8/ema21/ema50
+  Trend:            ema8_above_ema21, ema21_above_ema50
+  Momentum:         momentum_3/5/10, recent_bull_5/10
+  Volatility:       atr_14, atr_ratio, volatility_10/20
+  Volume:           volume_ratio
+  RSI:              rsi_14, rsi_5, rsi_diff
+  Candle:           body_ratio, upper/lower_wick, bar_is_bull
+  Order Block:      ob_exists, ob_width_atr
+  Bollinger Bands:  bb_pct_b, bb_width
+  MACD:             macd_line/signal/hist, macd_above_signal
+  Stochastic:       stoch_k/d, k_above_d, overbought/oversold
+  CCI:              cci, overbought/oversold
+  Williams %R:      willr
+  Donchian:         don_position
+  VWAP:             dist_vwap_atr, price_above_vwap
+  Market Structure: swing H/L, BOS, CHOCH, HH/LL/HL/LH,
+                    bull/bear structure, FVG, session H/L,
+                    overnight gap
+
+=================================================================
+WALK-FORWARD VALIDATION (5 folds, TimeSeriesSplit)
+=================================================================
+  Fold 1: Win filter=0.567  Direction=1.000  (train=109, test=104)
+  Fold 2: Win filter=0.510  Direction=1.000  (train=213, test=104)
+  Fold 3: Win filter=0.481  Direction=1.000  (train=317, test=104)
+  Fold 4: Win filter=0.538  Direction=1.000  (train=421, test=104)
+  Fold 5: Win filter=0.615  Direction=0.990  (train=525, test=104)
+
+  Avg Win filter: 0.542 +/- 0.047
+  Avg Direction:  0.998 +/- 0.004
+
+  Interpretation:
+  Win filter (54.2%): MODEST — slight edge, use carefully
+  Direction  (99.8%): GOOD — genuine directional edge
+
+=================================================================
+TRAINING FINAL MODELS
+=================================================================
+
+ML filter at >= 55% confidence:
+  Signals kept:     321 / 629
+  Win rate kept:    100.0%  (baseline: 51.2%)
+  Win rate dropped: 0.3%
+  Lift vs baseline: +48.8%
+
+Top 15 features (win filter):
+day_of_week           0.035438
+willr                 0.022005
+dist_fib50_atr        0.021098
+dist_vwap_atr         0.020637
+macd_signal           0.020563
+ob_exists             0.020553
+macd_line             0.020495
+dist_ema50_atr        0.020370
+cci_overbought        0.019665
+don_position          0.019441
+upper_wick_atr        0.019426
+dist_ema21_atr        0.019192
+fvg_bull_size_atr     0.019148
+prev_day_range_atr    0.019052
+lower_low             0.018834
+
+Top 15 features (direction model):
+bar_is_bull              0.418422
+dist_ema8_atr            0.218292
+momentum_3               0.080056
+bb_pct_b                 0.050893
+dist_ema21_atr           0.045177
+dist_swing_low_atr       0.045167
+dist_pdl_atr             0.040953
+stoch_k_above_d          0.020515
+dist_pdh_atr             0.015281
+dist_session_high_atr    0.012820
+momentum_5               0.009796
+dist_swing_high_atr      0.008897
+dist_fib50_atr           0.008678
+rsi_5                    0.008010
+don_position             0.006327
+
+=================================================================
+FINAL BACKTEST — ML-APPROVED SIGNALS ONLY
+=================================================================
+
+--- ML Portfolio Stats ---
+Start                         2023-12-11 01:00:00-05:00
+End                           2026-05-05 07:00:00-04:00
+Period                                549 days 01:00:00
+Start Value                                     25000.0
+End Value                                  50681.568907
+Total Return [%]                             102.726276
+Benchmark Return [%]                          73.928677
+Max Gross Exposure [%]                            100.0
+Total Fees Paid                                  1085.0
+Max Drawdown [%]                               9.049955
+Max Drawdown Duration                  57 days 01:00:00
+Total Trades                                        257
+Total Closed Trades                                 257
+Total Open Trades                                     0
+Open Trade PnL                                      0.0
+Win Rate [%]                                  77.821012
+Best Trade [%]                                 11.88615
+Worst Trade [%]                               -5.770361
+Avg Winning Trade [%]                          0.614649
+Avg Losing Trade [%]                          -0.874715
+Avg Winning Trade Duration              0 days 17:25:30
+Avg Losing Trade Duration     1 days 23:01:03.157894736
+Profit Factor                                  2.476279
+Expectancy                                    99.928284
+Sharpe Ratio                                   2.731181
+Calmar Ratio                                   6.626293
+Omega Ratio                                    1.148633
+Sortino Ratio                                  4.084881
+dtype: object
+
+--- ML Results by day ---
+           Trades Win_Rate     Avg_PnL    Total_PnL
+DayOfWeek                                          
+Monday         28    85.7%  129.081339  3614.277490
+Tuesday       108    75.9%   45.506655  4914.718794
+Wednesday      47    80.9%  159.025111  7474.180194
+Thursday       56    73.2%  120.139553  6727.814988
+Friday         18    83.3%  163.920969  2950.577441
+
+=================================================================
+COMPARISON — No ML vs With ML
+=================================================================
+
+Metric                             No ML     With ML      Change
+----------------------------------------------------------------
+Total Return %                    -5.39%     102.73%    +108.12%
+Sharpe Ratio                      -0.114       2.731      +2.845
+Max Drawdown %                   -20.21%      -9.05%     +11.16%
+Win Rate %                         47.0%       77.8%      +30.8%
+Total Trades                         496         257
+End Value $                    23,651.61   50,681.57
+
+  Walk-forward win filter: 54.2% — MODEST — slight edge, use carefully
+  Walk-forward direction:  99.8% — GOOD — genuine directional edge
