@@ -1,0 +1,511 @@
+//@version=6
+strategy("Project Pat v2", shorttitle = "ProjPat v2",
+     overlay            = true,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1,
+     max_bars_back      = 500,
+     calc_on_every_tick = false)
+
+// ═══════════════════════════════════════════════════════════════
+// NOT FINANCIAL ADVICE
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// TRADERSPOST ALERT HELPER
+// ═══════════════════════════════════════════════════════════════
+roundTick(float p) =>
+    math.round(p / syminfo.mintick) * syminfo.mintick
+
+buildAlert(string action, float tp, float sl) =>
+    float tpPrice = action == "buy"
+         ? roundTick(close + tp)
+         : roundTick(close - tp)
+    float slPrice = action == "buy"
+         ? roundTick(close - sl)
+         : roundTick(close + sl)
+    '{"ticker":"' + syminfo.ticker +
+     '","action":"' + action +
+     '","quantity":1,"takeProfit":{"limitPrice":' + str.tostring(tpPrice) +
+     '},"stopLoss":{"stopPrice":' + str.tostring(slPrice) + '}}'
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — PER DAY
+// ═══════════════════════════════════════════════════════════════
+string GRP_MON      = "── Monday (Prev High/Low Crossover) ──"
+bool   monEnabled   = input.bool(true,  "Enable Monday",    group = GRP_MON)
+int    monMaxTrades = input.int(2,      "Max trades",       minval = 1, maxval = 10, group = GRP_MON)
+int    monTP        = input.int(100,    "TP (points)",      minval = 1, group = GRP_MON)
+int    monSL        = input.int(30,     "SL (points)",      minval = 1, group = GRP_MON)
+
+string GRP_TUE      = "── Tuesday (Order Block) ──"
+bool   tueEnabled   = input.bool(true,  "Enable Tuesday",   group = GRP_TUE)
+int    tueMaxTrades = input.int(4,      "Max trades",       minval = 1, maxval = 10, group = GRP_TUE)
+int    tueTP        = input.int(50,     "TP (points)",      minval = 1, group = GRP_TUE)
+int    tueSL        = input.int(100,    "SL (points)",      minval = 1, group = GRP_TUE)
+
+string GRP_WED      = "── Wednesday (Order Block) ──"
+bool   wedEnabled   = input.bool(true,  "Enable Wednesday", group = GRP_WED)
+int    wedMaxTrades = input.int(2,      "Max trades",       minval = 1, maxval = 10, group = GRP_WED)
+int    wedTP        = input.int(100,    "TP (points)",      minval = 1, group = GRP_WED)
+int    wedSL        = input.int(50,     "SL (points)",      minval = 1, group = GRP_WED)
+
+string GRP_THU      = "── Thursday (Prev High/Low Crossover) ──"
+bool   thuEnabled   = input.bool(true,  "Enable Thursday",  group = GRP_THU)
+int    thuMaxTrades = input.int(2,      "Max trades",       minval = 1, maxval = 10, group = GRP_THU)
+int    thuTP        = input.int(50,     "TP (points)",      minval = 1, group = GRP_THU)
+int    thuSL        = input.int(100,    "SL (points)",      minval = 1, group = GRP_THU)
+
+string GRP_FRI      = "── Friday (Fib 0.500 Crossover) ──"
+bool   friEnabled   = input.bool(true,  "Enable Friday",    group = GRP_FRI)
+int    friMaxTrades = input.int(1,      "Max trades",       minval = 1, maxval = 10, group = GRP_FRI)
+int    friTP        = input.int(100,    "TP (points)",      minval = 1, group = GRP_FRI)
+int    friSL        = input.int(60,     "SL (points)",      minval = 1, group = GRP_FRI)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — INDICATOR FILTERS
+// ═══════════════════════════════════════════════════════════════
+string GRP_FILT  = "── Indicator Filters ──"
+int    minFilters = input.int(3,
+     "Min filters to pass (0 = off, 5 = strictest)",
+     minval = 0, maxval = 5, group = GRP_FILT)
+bool   useVWAP       = input.bool(true,  "VWAP — long above, short below",           group = GRP_FILT)
+bool   useMACDFilter = input.bool(true,  "MACD — line vs signal",                    group = GRP_FILT)
+bool   useEMA21      = input.bool(true,  "EMA 21 — price vs EMA",                    group = GRP_FILT)
+bool   useWillR      = input.bool(true,  "Williams %R — avoid extremes",             group = GRP_FILT)
+bool   useBBFilter   = input.bool(true,  "Bollinger %B — avoid band extremes",       group = GRP_FILT)
+int    willrOB       = input.int(-20,    "  Williams %R overbought level",
+     minval = -100, maxval = 0, group = GRP_FILT)
+int    willrOS       = input.int(-80,    "  Williams %R oversold level",
+     minval = -100, maxval = 0, group = GRP_FILT)
+float  bbHigh        = input.float(0.8,  "  BB %B avoid long above",
+     minval = 0.5, maxval = 1.0, step = 0.05, group = GRP_FILT)
+float  bbLow         = input.float(0.2,  "  BB %B avoid short below",
+     minval = 0.0, maxval = 0.5, step = 0.05, group = GRP_FILT)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS — DISPLAY
+// ═══════════════════════════════════════════════════════════════
+string GRP_DISP         = "── Display ──"
+bool   showLabels       = input.bool(true,  "Show buy/sell labels",     group = GRP_DISP)
+bool   showFilterScore  = input.bool(true,  "Show filter score on label",group = GRP_DISP)
+bool   showLevels       = input.bool(true,  "Show Prev Day H/L + Fib",  group = GRP_DISP)
+bool   showEMA21Line    = input.bool(true,  "Show EMA 21",              group = GRP_DISP)
+bool   showVWAPLine     = input.bool(true,  "Show VWAP",                group = GRP_DISP)
+bool   showBBLines      = input.bool(false, "Show Bollinger Bands",     group = GRP_DISP)
+
+// ═══════════════════════════════════════════════════════════════
+// TP / SL IN TICKS
+// ═══════════════════════════════════════════════════════════════
+int monTPt = math.round(monTP / syminfo.mintick)
+int monSLt = math.round(monSL / syminfo.mintick)
+int tueTPt = math.round(tueTP / syminfo.mintick)
+int tueSLt = math.round(tueSL / syminfo.mintick)
+int wedTPt = math.round(wedTP / syminfo.mintick)
+int wedSLt = math.round(wedSL / syminfo.mintick)
+int thuTPt = math.round(thuTP / syminfo.mintick)
+int thuSLt = math.round(thuSL / syminfo.mintick)
+int friTPt = math.round(friTP / syminfo.mintick)
+int friSLt = math.round(friSL / syminfo.mintick)
+
+// ═══════════════════════════════════════════════════════════════
+// PREVIOUS DAY HIGH / LOW / FIB 50
+// ═══════════════════════════════════════════════════════════════
+float prevDayHigh = request.security(syminfo.tickerid, "1D",
+     high[1], lookahead = barmerge.lookahead_on)
+float prevDayLow  = request.security(syminfo.tickerid, "1D",
+     low[1],  lookahead = barmerge.lookahead_on)
+float fib50       = prevDayLow + 0.500 * (prevDayHigh - prevDayLow)
+
+// ═══════════════════════════════════════════════════════════════
+// SESSION & TIME
+// ═══════════════════════════════════════════════════════════════
+bool newSession = hour == 18 and (hour[1] != 18 or dayofmonth != dayofmonth[1])
+bool forceClose = hour == 15 and minute >= 55
+
+bool isMon = dayofweek == dayofweek.monday
+bool isTue = dayofweek == dayofweek.tuesday
+bool isWed = dayofweek == dayofweek.wednesday
+bool isThu = dayofweek == dayofweek.thursday
+bool isFri = dayofweek == dayofweek.friday
+
+// ═══════════════════════════════════════════════════════════════
+// CROSSOVERS — pre-computed every bar (outside any if block)
+// ═══════════════════════════════════════════════════════════════
+bool crossAboveHigh = ta.crossover (close, prevDayHigh)
+bool crossBelowLow  = ta.crossunder(close, prevDayLow)
+bool crossAboveFib  = ta.crossover (close, fib50)
+bool crossBelowFib  = ta.crossunder(close, fib50)
+
+// ═══════════════════════════════════════════════════════════════
+// INDICATORS
+// ═══════════════════════════════════════════════════════════════
+float ema21 = ta.ema(close, 21)
+
+[macdLine, macdSignal, _] = ta.macd(close, 12, 26, 9)
+
+float willR = -100.0 * (ta.highest(high, 14) - close) /
+              (ta.highest(high, 14) - ta.lowest(low, 14) + syminfo.mintick)
+
+float bbMid    = ta.sma(close, 20)
+float bbStdDev = ta.stdev(close, 20)
+float bbUpper  = bbMid + 2.0 * bbStdDev
+float bbLower  = bbMid - 2.0 * bbStdDev
+float bbPctB   = (close - bbLower) / (bbUpper - bbLower + syminfo.mintick)
+
+float vwapVal  = ta.vwap(hlc3)
+
+// ═══════════════════════════════════════════════════════════════
+// FILTER SCORE — pure function, no global modifications
+//   Returns int: how many of the enabled filters agree
+// ═══════════════════════════════════════════════════════════════
+filterScore(bool isLong) =>
+    int s = 0
+    if useVWAP
+        if isLong and close > vwapVal
+            s += 1
+        if not isLong and close < vwapVal
+            s += 1
+    if useMACDFilter
+        if isLong and macdLine > macdSignal
+            s += 1
+        if not isLong and macdLine < macdSignal
+            s += 1
+    if useEMA21
+        if isLong and close > ema21
+            s += 1
+        if not isLong and close < ema21
+            s += 1
+    if useWillR
+        if isLong and willR < willrOB
+            s += 1
+        if not isLong and willR > willrOS
+            s += 1
+    if useBBFilter
+        if isLong and bbPctB < bbHigh
+            s += 1
+        if not isLong and bbPctB > bbLow
+            s += 1
+    s
+
+// ═══════════════════════════════════════════════════════════════
+// DAILY TRADE COUNTER — reset at 6 PM session open
+// ═══════════════════════════════════════════════════════════════
+var int dayTradeCount = 0
+if newSession
+    dayTradeCount := 0
+
+// ═══════════════════════════════════════════════════════════════
+// ORDER BLOCK DETECTION — 1H bars
+// ═══════════════════════════════════════════════════════════════
+[h1O, h1H, h1L, h1C] = request.security(syminfo.tickerid, "60",
+     [open, high, low, close], lookahead = barmerge.lookahead_on)
+
+var array<bool>  h1Dir   = array.new<bool>()
+var array<float> h1HiArr = array.new<float>()
+var array<float> h1LoArr = array.new<float>()
+
+var float obHi     = na
+var float obLo     = na
+var bool  obExists = false
+
+if newSession
+    array.clear(h1Dir)
+    array.clear(h1HiArr)
+    array.clear(h1LoArr)
+    obHi     := na
+    obLo     := na
+    obExists := false
+
+if timeframe.change("60")
+    array.push(h1Dir,   h1C >= h1O)
+    array.push(h1HiArr, h1H)
+    array.push(h1LoArr, h1L)
+    if array.size(h1Dir) > 12
+        array.shift(h1Dir)
+        array.shift(h1HiArr)
+        array.shift(h1LoArr)
+
+    int n = array.size(h1Dir)
+    if n >= 5
+        // ── Bearish OB ──────────────────────────────────────
+        int trailRed = 0
+        for i = n - 1 to 0
+            if not array.get(h1Dir, i)
+                trailRed += 1
+            else
+                break
+        int obGreen = 0
+        if trailRed >= 2
+            for i = n - 1 - trailRed to 0
+                if array.get(h1Dir, i)
+                    obGreen += 1
+                else
+                    break
+        int leadRed = 0
+        if trailRed >= 2 and obGreen >= 1 and obGreen <= 2
+            for i = n - 1 - trailRed - obGreen to 0
+                if not array.get(h1Dir, i)
+                    leadRed += 1
+                else
+                    break
+        if trailRed >= 2 and obGreen >= 1 and obGreen <= 2 and leadRed >= 2
+            int   fi  = n - 1 - trailRed - obGreen + 1
+            int   li  = n - 1 - trailRed
+            float zHi = array.get(h1HiArr, fi)
+            float zLo = array.get(h1LoArr, fi)
+            for k = fi to li
+                zHi := math.max(zHi, array.get(h1HiArr, k))
+                zLo := math.min(zLo, array.get(h1LoArr, k))
+            obHi     := zHi
+            obLo     := zLo
+            obExists := true
+
+        // ── Bullish OB ──────────────────────────────────────
+        int trailGrn = 0
+        for i = n - 1 to 0
+            if array.get(h1Dir, i)
+                trailGrn += 1
+            else
+                break
+        int obRed = 0
+        if trailGrn >= 2
+            for i = n - 1 - trailGrn to 0
+                if not array.get(h1Dir, i)
+                    obRed += 1
+                else
+                    break
+        int leadGrn = 0
+        if trailGrn >= 2 and obRed >= 1 and obRed <= 2
+            for i = n - 1 - trailGrn - obRed to 0
+                if array.get(h1Dir, i)
+                    leadGrn += 1
+                else
+                    break
+        if trailGrn >= 2 and obRed >= 1 and obRed <= 2 and leadGrn >= 2
+            int   fi2  = n - 1 - trailGrn - obRed + 1
+            int   li2  = n - 1 - trailGrn
+            float zHi2 = array.get(h1HiArr, fi2)
+            float zLo2 = array.get(h1LoArr, fi2)
+            for k2 = fi2 to li2
+                zHi2 := math.max(zHi2, array.get(h1HiArr, k2))
+                zLo2 := math.min(zLo2, array.get(h1LoArr, k2))
+            obHi     := zHi2
+            obLo     := zLo2
+            obExists := true
+
+// ═══════════════════════════════════════════════════════════════
+// FORCE CLOSE — 3:55 PM every day
+// ═══════════════════════════════════════════════════════════════
+if forceClose and strategy.position_size != 0
+    strategy.close_all(comment = "Force Close 3:55 PM")
+    alert('{"ticker":"' + syminfo.ticker + '","action":"exit"}',
+          alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════
+// ENTRY GATE
+// ═══════════════════════════════════════════════════════════════
+bool canTrade = strategy.position_size == 0 and not forceClose
+
+// ── Signal label helper (pure — no global writes) ────────────
+drawLabel(bool isLong, string tag, int score) =>
+    if showLabels
+        string scoreStr = showFilterScore
+             ? " [" + str.tostring(score) + "/5]" : ""
+        string txt = (isLong ? "▲ " : "▼ ") + tag + scoreStr
+        label.new(
+             bar_index,
+             isLong ? low  - 4 * syminfo.mintick
+                    : high + 4 * syminfo.mintick,
+             text      = txt,
+             color     = isLong ? color.new(#26A69A, 0)
+                                : color.new(#EF5350, 0),
+             textcolor = color.white,
+             style     = isLong ? label.style_label_up
+                                : label.style_label_down,
+             size      = size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// MONDAY — Prev Day High/Low Crossover
+// ═══════════════════════════════════════════════════════════════
+if monEnabled and isMon and canTrade and dayTradeCount < monMaxTrades
+    if crossAboveHigh
+        int sc = filterScore(true)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Mon_L", strategy.long,
+                 comment       = "Mon Long",
+                 alert_message = buildAlert("buy", monTP, monSL))
+            strategy.exit("Mon_L_X", from_entry = "Mon_L",
+                 profit = monTPt, loss = monSLt,
+                 comment = "Mon Long Exit")
+            drawLabel(true, "Mon Long", sc)
+            dayTradeCount += 1
+
+    else if crossBelowLow
+        int sc = filterScore(false)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Mon_S", strategy.short,
+                 comment       = "Mon Short",
+                 alert_message = buildAlert("sell", monTP, monSL))
+            strategy.exit("Mon_S_X", from_entry = "Mon_S",
+                 profit = monTPt, loss = monSLt,
+                 comment = "Mon Short Exit")
+            drawLabel(false, "Mon Short", sc)
+            dayTradeCount += 1
+
+// ═══════════════════════════════════════════════════════════════
+// TUESDAY — OB Open Inside / Close Outside
+// ═══════════════════════════════════════════════════════════════
+if tueEnabled and isTue and canTrade and dayTradeCount < tueMaxTrades and obExists
+    bool tueOpenIn = open >= obLo and open <= obHi
+    if tueOpenIn and close < obLo
+        int sc = filterScore(false)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Tue_S", strategy.short,
+                 comment       = "Tue Short",
+                 alert_message = buildAlert("sell", tueTP, tueSL))
+            strategy.exit("Tue_S_X", from_entry = "Tue_S",
+                 profit = tueTPt, loss = tueSLt,
+                 comment = "Tue Short Exit")
+            drawLabel(false, "Tue Short", sc)
+            dayTradeCount += 1
+
+    else if tueOpenIn and close > obHi
+        int sc = filterScore(true)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Tue_L", strategy.long,
+                 comment       = "Tue Long",
+                 alert_message = buildAlert("buy", tueTP, tueSL))
+            strategy.exit("Tue_L_X", from_entry = "Tue_L",
+                 profit = tueTPt, loss = tueSLt,
+                 comment = "Tue Long Exit")
+            drawLabel(true, "Tue Long", sc)
+            dayTradeCount += 1
+
+// ═══════════════════════════════════════════════════════════════
+// WEDNESDAY — OB Open Inside / Close Outside
+// ═══════════════════════════════════════════════════════════════
+if wedEnabled and isWed and canTrade and dayTradeCount < wedMaxTrades and obExists
+    bool wedOpenIn = open >= obLo and open <= obHi
+    if wedOpenIn and close < obLo
+        int sc = filterScore(false)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Wed_S", strategy.short,
+                 comment       = "Wed Short",
+                 alert_message = buildAlert("sell", wedTP, wedSL))
+            strategy.exit("Wed_S_X", from_entry = "Wed_S",
+                 profit = wedTPt, loss = wedSLt,
+                 comment = "Wed Short Exit")
+            drawLabel(false, "Wed Short", sc)
+            dayTradeCount += 1
+
+    else if wedOpenIn and close > obHi
+        int sc = filterScore(true)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Wed_L", strategy.long,
+                 comment       = "Wed Long",
+                 alert_message = buildAlert("buy", wedTP, wedSL))
+            strategy.exit("Wed_L_X", from_entry = "Wed_L",
+                 profit = wedTPt, loss = wedSLt,
+                 comment = "Wed Long Exit")
+            drawLabel(true, "Wed Long", sc)
+            dayTradeCount += 1
+
+// ═══════════════════════════════════════════════════════════════
+// THURSDAY — Prev Day Low/High Crossover
+// ═══════════════════════════════════════════════════════════════
+if thuEnabled and isThu and canTrade and dayTradeCount < thuMaxTrades
+    if crossBelowLow
+        int sc = filterScore(false)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Thu_S", strategy.short,
+                 comment       = "Thu Short",
+                 alert_message = buildAlert("sell", thuTP, thuSL))
+            strategy.exit("Thu_S_X", from_entry = "Thu_S",
+                 profit = thuTPt, loss = thuSLt,
+                 comment = "Thu Short Exit")
+            drawLabel(false, "Thu Short", sc)
+            dayTradeCount += 1
+
+    else if crossAboveHigh
+        int sc = filterScore(true)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Thu_L", strategy.long,
+                 comment       = "Thu Long",
+                 alert_message = buildAlert("buy", thuTP, thuSL))
+            strategy.exit("Thu_L_X", from_entry = "Thu_L",
+                 profit = thuTPt, loss = thuSLt,
+                 comment = "Thu Long Exit")
+            drawLabel(true, "Thu Long", sc)
+            dayTradeCount += 1
+
+// ═══════════════════════════════════════════════════════════════
+// FRIDAY — Fib 0.500 Crossover
+// ═══════════════════════════════════════════════════════════════
+if friEnabled and isFri and canTrade and dayTradeCount < friMaxTrades
+    if crossAboveFib
+        int sc = filterScore(true)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Fri_L", strategy.long,
+                 comment       = "Fri Long",
+                 alert_message = buildAlert("buy", friTP, friSL))
+            strategy.exit("Fri_L_X", from_entry = "Fri_L",
+                 profit = friTPt, loss = friSLt,
+                 comment = "Fri Long Exit")
+            drawLabel(true, "Fri Long", sc)
+            dayTradeCount += 1
+
+    else if crossBelowFib
+        int sc = filterScore(false)
+        if minFilters == 0 or sc >= minFilters
+            strategy.entry("Fri_S", strategy.short,
+                 comment       = "Fri Short",
+                 alert_message = buildAlert("sell", friTP, friSL))
+            strategy.exit("Fri_S_X", from_entry = "Fri_S",
+                 profit = friTPt, loss = friSLt,
+                 comment = "Fri Short Exit")
+            drawLabel(false, "Fri Short", sc)
+            dayTradeCount += 1
+
+// ═══════════════════════════════════════════════════════════════
+// PLOTS
+// ═══════════════════════════════════════════════════════════════
+plot(showLevels ? prevDayHigh : na, "Prev Day High",
+     color = color.new(#F44336, 40), style = plot.style_stepline)
+plot(showLevels ? prevDayLow  : na, "Prev Day Low",
+     color = color.new(#F44336, 40), style = plot.style_stepline)
+plot(showLevels ? fib50       : na, "Fib 0.500",
+     color = color.new(#FF9800, 40), style = plot.style_stepline)
+plot(showEMA21Line ? ema21    : na, "EMA 21",
+     color = color.new(#29B6F6, 0),  linewidth = 1)
+plot(showVWAPLine  ? vwapVal  : na, "VWAP",
+     color = color.new(#AB47BC, 0),  linewidth = 1)
+plot(showBBLines   ? bbUpper  : na, "BB Upper",
+     color = color.new(#78909C, 60), linewidth = 1)
+plot(showBBLines   ? bbMid    : na, "BB Mid",
+     color = color.new(#78909C, 60), linewidth = 1,
+     style = plot.style_circles)
+plot(showBBLines   ? bbLower  : na, "BB Lower",
+     color = color.new(#78909C, 60), linewidth = 1)
+
+// ── Background when all 5 filters align ─────────────────────
+bgcolor(filterScore(true)  == 5 ? color.new(#26A69A, 92) :
+        filterScore(false) == 5 ? color.new(#EF5350, 92) : na,
+        title = "All-filter alignment")
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+alertcondition(
+     strategy.position_size >  0 and strategy.position_size[1] <= 0,
+     title   = "Long Entry",
+     message = "ProjectPat — Long entry {{close}}")
+
+alertcondition(
+     strategy.position_size <  0 and strategy.position_size[1] >= 0,
+     title   = "Short Entry",
+     message = "ProjectPat — Short entry {{close}}")
+
+alertcondition(
+     strategy.position_size == 0 and strategy.position_size[1] != 0,
+     title   = "Position Closed",
+     message = "ProjectPat — Closed {{close}}")
